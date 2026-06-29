@@ -128,3 +128,70 @@
     @apply font-sans;
   }
 }
+
+@layer utilities {
+  @keyframes nexora-fade-up-sm {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes nexora-fade-up-md {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes nexora-fade-up-lg {
+    from {
+      opacity: 0;
+      transform: translateY(28px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .nexora-video-fallback {
+    background:
+      radial-gradient(1200px 600px at 70% 10%, rgb(99 102 241 / 0.18), transparent 60%),
+      radial-gradient(900px 500px at 20% 80%, rgb(236 72 153 / 0.1), transparent 60%),
+      linear-gradient(180deg, #fafafa 0%, #f3f4f6 100%);
+  }
+
+  .nexora-anim-badge {
+    opacity: 0;
+    animation: nexora-fade-up-sm 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0s forwards;
+  }
+
+  .nexora-anim-headline {
+    opacity: 0;
+    animation: nexora-fade-up-md 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.1s forwards;
+  }
+
+  .nexora-anim-sub {
+    opacity: 0;
+    animation: nexora-fade-up-md 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.2s forwards;
+  }
+
+  .nexora-anim-ctas {
+    opacity: 0;
+    animation: nexora-fade-up-md 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.3s forwards;
+  }
+
+  .nexora-anim-dashboard {
+    opacity: 0;
+    animation: nexora-fade-up-lg 0.8s cubic-bezier(0.22, 1, 0.36, 1) 0.5s forwards;
+  }
+}
