@@ -86,10 +86,10 @@ function Board() {
     }
     downloadCsv(
       `${slugify(activeProject?.name ?? "bug-board")}.csv`,
-      bugsToCsv(visibleBugs, projectName)
+      bugsToCsv(visibleBugs, projectName),
     );
     toast.success(
-      `Exported ${visibleBugs.length} bug${visibleBugs.length === 1 ? "" : "s"} to CSV`
+      `Exported ${visibleBugs.length} bug${visibleBugs.length === 1 ? "" : "s"} to CSV`,
     );
   }, [activeProject, projectName, visibleBugs]);
 
@@ -146,7 +146,7 @@ function Board() {
   const missing = detailBugId && !getBug(detailBugId);
 
   return (
-    <div className="mx-auto flex w-full max-w-425 flex-col gap-4 p-6 lg:p-8">
+    <div className="mx-auto flex min-h-0 w-full max-w-425 flex-1 flex-col gap-4 p-6 lg:p-8">
       <header className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-center gap-2.5">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -157,7 +157,8 @@ function Board() {
               Bug Board
             </h1>
             <p className="text-sm text-muted-foreground">
-              Track, assign, reproduce, and resolve product issues collaboratively.
+              Track, assign, reproduce, and resolve product issues
+              collaboratively.
             </p>
           </div>
         </div>
@@ -185,8 +186,7 @@ function Board() {
                 size="icon-xs"
                 onClick={() => setQuery("")}
                 className="absolute top-1/2 right-1 -translate-y-1/2"
-                aria-label="Clear search"
-              >
+                aria-label="Clear search">
                 <XIcon aria-hidden="true" />
               </Button>
             ) : null}
@@ -195,9 +195,11 @@ function Board() {
           <Button
             variant={filtersExpanded ? "secondary" : "outline"}
             onClick={() => setFiltersExpanded((previous) => !previous)}
-            aria-expanded={filtersExpanded}
-          >
-            <SlidersHorizontalIcon data-icon="inline-start" aria-hidden="true" />
+            aria-expanded={filtersExpanded}>
+            <SlidersHorizontalIcon
+              data-icon="inline-start"
+              aria-hidden="true"
+            />
             Filter
             {filterCount > 0 ? (
               <Badge variant="secondary" className="tabular-nums">
@@ -221,8 +223,7 @@ function Board() {
             size="icon"
             onClick={() => setShortcutsOpen(true)}
             aria-label="Keyboard shortcuts"
-            title="Keyboard shortcuts (?)"
-          >
+            title="Keyboard shortcuts (?)">
             <KeyboardIcon aria-hidden="true" />
           </Button>
 
@@ -244,8 +245,7 @@ function Board() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => openProjectDialog("create")}
-          >
+            onClick={() => openProjectDialog("create")}>
             <FolderPlusIcon data-icon="inline-start" aria-hidden="true" />
             New project
           </Button>
@@ -266,9 +266,9 @@ function Board() {
         </p>
       ) : null}
 
-      <Card className="gap-0 overflow-hidden py-0">
+      <Card className="flex h-[600px] flex-col gap-0 overflow-hidden rounded-md py-0">
         <BulkActions />
-        <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+        <div className="flex items-center justify-between gap-2 border-b px-3 pt-2.5 pb-3.5">
           <SelectionSummary />
           <span className="text-xs text-muted-foreground">
             Press <kbd className="font-mono">?</kbd> for shortcuts

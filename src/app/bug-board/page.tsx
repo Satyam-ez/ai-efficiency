@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 
 export default function BugBoardPage() {
   return (
-    <main className="min-h-dvh bg-muted/30">
+    <main className="flex min-h-dvh flex-col bg-muted/30">
       <BugBoard />
     </main>
   );

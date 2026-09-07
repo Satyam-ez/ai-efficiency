@@ -280,7 +280,7 @@ function BugRow({ bug, showProject }: { bug: Bug; showProject: boolean }) {
       <TableCell className={HIDE_CLASSES.lg}>
         <span className="flex flex-col">
           {bug.module}
-          <span className="text-xs text-muted-foreground">{bug.component}</span>
+          <span className="text-[0.8125rem] text-muted-foreground">{bug.component}</span>
         </span>
       </TableCell>
       <TableCell>
@@ -357,8 +357,11 @@ export function BugTable() {
   }
 
   return (
-    <Table containerClassName="max-h-[60dvh] overflow-auto">
-      <TableHeader className="sticky top-0 z-10 [&_th]:sticky [&_th]:top-0 [&_th]:bg-muted">
+    <Table
+      className="text-[0.9375rem]"
+      containerClassName="no-scrollbar min-h-0 flex-1 overflow-auto"
+    >
+      <TableHeader className="sticky top-0 z-10 [&_th]:sticky [&_th]:top-0 [&_th]:h-11 [&_th]:bg-table-header [&_th]:text-[0.8125rem] [&_th]:font-semibold [&_th]:text-table-header-foreground">
         <TableRow className="hover:bg-transparent">
           <TableHead className="w-9 pl-4">
             <Checkbox
