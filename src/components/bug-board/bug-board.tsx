@@ -6,7 +6,10 @@ import {
   DownloadIcon,
   FolderPlusIcon,
   KeyboardIcon,
+  LoaderCircleIcon,
+  LogOutIcon,
   PlusIcon,
+  RefreshCwIcon,
   SearchIcon,
   Share2Icon,
   SlidersHorizontalIcon,
@@ -32,6 +35,10 @@ import {
   ProjectDialog,
   ProjectSwitcher,
 } from "@/components/bug-board/project-switcher";
+import {
+  SessionGate,
+  useSession,
+} from "@/components/bug-board/session-provider";
 import { ShareHandoffDialog } from "@/components/bug-board/share-handoff-dialog";
 import { SummaryCards } from "@/components/bug-board/summary-cards";
 import { TablePagination } from "@/components/bug-board/table-pagination";
@@ -42,7 +49,12 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { bugsToCsv, downloadCsv } from "@/lib/bug-board/export";
 import { OPEN_TESTER_STATUSES } from "@/lib/bug-board/filters";
 
@@ -74,6 +86,9 @@ function Board() {
     detailBugId,
     openDetail,
     getBug,
+    loading,
+    loadError,
+    refresh,
   } = useBugBoard();
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -144,6 +159,35 @@ function Board() {
   }, [activeProjectId, detailBugId]);
 
   const missing = detailBugId && !getBug(detailBugId);
+
+  if (loading) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3">
+        <LoaderCircleIcon
+          className="size-5 animate-spin text-muted-foreground"
+          aria-hidden="true"
+        />
+        <p className="text-sm text-muted-foreground">Loading the board…</p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
+        <h2 className="font-heading text-lg font-semibold">
+          The board could not be loaded
+        </h2>
+        <p className="max-w-md text-center text-sm text-muted-foreground">
+          {loadError}
+        </p>
+        <Button onClick={() => refresh()}>
+          <RefreshCwIcon data-icon="inline-start" aria-hidden="true" />
+          Try again
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex min-h-0 w-full max-w-425 flex-1 flex-col gap-4 p-6 lg:p-8">
@@ -228,6 +272,8 @@ function Board() {
           </Button>
 
           <ThemeToggle />
+
+          <SignedInAs />
         </div>
       </header>
 
@@ -288,13 +334,45 @@ function Board() {
   );
 }
 
+function SignedInAs() {
+  const { user, signOut } = useSession();
+
+  return (
+    <div className="flex items-center gap-1.5 border-l pl-1.5">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="flex size-7 cursor-default items-center justify-center rounded-full bg-secondary text-xs font-medium tabular-nums">
+            {user.initials}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {user.name} · {user.role}
+        </TooltipContent>
+      </Tooltip>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => signOut()}
+        aria-label={`Sign out ${user.name}`}
+        title="Sign out"
+      >
+        <LogOutIcon aria-hidden="true" />
+      </Button>
+    </div>
+  );
+}
+
 export function BugBoard() {
   return (
-    <BugBoardProvider>
-      <TooltipProvider delayDuration={250}>
-        <Board />
-        <Toaster position="bottom-right" />
-      </TooltipProvider>
-    </BugBoardProvider>
+    <TooltipProvider delayDuration={250}>
+      {/* Nothing renders until the session resolves: every write the board
+          makes is attributed to the signed-in person. */}
+      <SessionGate>
+        <BugBoardProvider>
+          <Board />
+        </BugBoardProvider>
+      </SessionGate>
+      <Toaster position="bottom-right" />
+    </TooltipProvider>
   );
 }

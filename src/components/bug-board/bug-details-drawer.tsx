@@ -259,8 +259,8 @@ function DetailsTab({ bug }: { bug: Bug }) {
   const { addAttachments, removeAttachment, openPreview } = useBugBoard();
   const { attachments: pending, addFiles, remove, reset } = useEvidenceUploads();
 
-  function handleAdd(files: File[]) {
-    const { accepted, rejected } = addFiles(files);
+  async function handleAdd(files: File[]) {
+    const { acceptedFiles, rejected } = addFiles(files);
     if (rejected.length > 0) {
       toast.error(
         `Too large for upload (max ${formatFileSize(MAX_UPLOAD_BYTES)}): ${rejected
@@ -268,24 +268,15 @@ function DetailsTab({ bug }: { bug: Bug }) {
           .join(", ")}`
       );
     }
-    if (accepted.length === 0) return;
-    // Uploads land on the bug once the simulated transfer finishes.
-    window.setTimeout(() => {
-      addAttachments(
-        bug.id,
-        accepted.map((attachment) => ({
-          ...attachment,
-          progress: 100,
-          status: "ready" as const,
-        }))
-      );
-      reset([]);
-      toast.success(
-        accepted.length === 1
-          ? `${accepted[0].name} attached to ${bug.id}`
-          : `${accepted.length} files attached to ${bug.id}`
-      );
-    }, 1200);
+    if (acceptedFiles.length === 0) return;
+    // The bug already exists, so its evidence goes up straight away.
+    await addAttachments(bug.id, acceptedFiles);
+    reset([]);
+    toast.success(
+      acceptedFiles.length === 1
+        ? `${acceptedFiles[0].name} attached to ${bug.id}`
+        : `${acceptedFiles.length} files attached to ${bug.id}`
+    );
   }
 
   return (
@@ -403,8 +394,8 @@ export function BugDetailsDrawer() {
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => {
-                    const copy = duplicateBug(bug.id);
+                  onClick={async () => {
+                    const copy = await duplicateBug(bug.id);
                     if (copy) toast.success(`Duplicated as ${copy.id}`);
                   }}
                   aria-label="Duplicate bug"

@@ -42,6 +42,8 @@
   --color-card: var(--card);
   --color-table-header: var(--table-header);
   --color-table-header-foreground: var(--table-header-foreground);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -68,6 +70,9 @@
   --accent-foreground: oklch(0.205 0 0);
   --table-header: #06402b;
   --table-header-foreground: oklch(0.955 0.015 155);
+  /* Same green as the board's table header, named for reuse. */
+  --brand: #06402b;
+  --brand-soft: oklch(0.955 0.02 155);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
@@ -105,6 +110,8 @@
   --accent-foreground: oklch(0.985 0 0);
   --table-header: oklch(0.269 0 0);
   --table-header-foreground: oklch(0.985 0 0);
+  --brand: oklch(0.72 0.13 158);
+  --brand-soft: oklch(0.28 0.04 158);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
@@ -218,5 +225,146 @@
     width: 0;
     height: 0;
     display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Nexora landing page
+   Only what Tailwind utilities cannot express: keyframes, the hero backdrop,
+   and the two looping accents in the product mockup.
+   --------------------------------------------------------------------------- */
+@layer utilities {
+  @keyframes nx-rise {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes nx-float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-7px);
+    }
+  }
+
+  @keyframes nx-pulse-ring {
+    0% {
+      opacity: 0.55;
+      transform: scale(0.9);
+    }
+    70% {
+      opacity: 0;
+      transform: scale(1.9);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.9);
+    }
+  }
+
+  @keyframes nx-sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(220%);
+    }
+  }
+
+  /* Hero entrance. Indices stagger the headline, sub, CTAs and mockup. */
+  .nx-rise {
+    opacity: 0;
+    animation: nx-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  .nx-rise-1 { animation-delay: 0.05s; }
+  .nx-rise-2 { animation-delay: 0.14s; }
+  .nx-rise-3 { animation-delay: 0.23s; }
+  .nx-rise-4 { animation-delay: 0.32s; }
+  .nx-rise-5 { animation-delay: 0.44s; }
+
+  .nx-float {
+    animation: nx-float 6s ease-in-out infinite;
+  }
+  .nx-float-slow {
+    animation: nx-float 8s ease-in-out infinite;
+  }
+
+  /* The "live" dot on the mockup's critical row. */
+  .nx-ping::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: currentColor;
+    animation: nx-pulse-ring 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+
+  /* A single light pass across the mockup, so it reads as a live screen. */
+  .nx-sweep::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 45%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.35),
+      transparent
+    );
+    animation: nx-sweep 7s ease-in-out infinite;
+    animation-delay: 2s;
+    pointer-events: none;
+  }
+
+  .nx-menu-item {
+    animation: nx-rise 0.28s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  /* Soft field behind the hero: brand green, kept low-contrast. */
+  .nx-hero-bg {
+    background:
+      radial-gradient(
+        58rem 34rem at 50% -10%,
+        color-mix(in oklab, var(--brand) 24%, transparent),
+        transparent 64%
+      ),
+      radial-gradient(
+        34rem 26rem at 86% 4%,
+        color-mix(in oklab, var(--brand) 14%, transparent),
+        transparent 66%
+      );
+  }
+
+  /* Faint grid, masked so it fades out before it meets the content. */
+  .nx-grid {
+    background-image:
+      linear-gradient(to right, var(--border) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(46rem 32rem at 50% 0%, #000 25%, transparent 80%);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nx-rise,
+    .nx-float,
+    .nx-float-slow,
+    .nx-menu-item {
+      animation: none;
+      opacity: 1;
+    }
+    .nx-ping::after,
+    .nx-sweep::after {
+      animation: none;
+      opacity: 0;
+    }
   }
 }

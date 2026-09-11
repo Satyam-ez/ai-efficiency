@@ -76,8 +76,8 @@ export function BugRowActions({ bug }: { bug: Bug }) {
             Copy share link
           </DropdownMenuItem>
           <DropdownMenuItem
-            onSelect={() => {
-              const copy = duplicateBug(bug.id);
+            onSelect={async () => {
+              const copy = await duplicateBug(bug.id);
               if (copy) toast.success(`Duplicated as ${copy.id}`);
             }}
           >

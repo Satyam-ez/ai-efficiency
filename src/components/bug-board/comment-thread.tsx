@@ -29,7 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useEvidenceUploads } from "@/hooks/use-evidence-uploads";
 import {
   boardNowMs,
-  CURRENT_USER_ID,
+  getCurrentUserId,
   PEOPLE,
   personName,
   personOf,
@@ -88,7 +88,7 @@ function Reactions({ bug, comment }: { bug: Bug; comment: Comment }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {comment.reactions.map((reaction) => {
-        const mine = reaction.byIds.includes(CURRENT_USER_ID);
+        const mine = reaction.byIds.includes(getCurrentUserId() ?? "");
         return (
           <Button
             key={reaction.emoji}
@@ -230,23 +230,27 @@ function Composer({
   const { addComment } = useBugBoard();
   const [body, setBody] = useState("");
   const [code, setCode] = useState<string | null>(null);
-  const { attachments, addFiles, remove, reset } = useEvidenceUploads();
+  const { attachments, files, addFiles, remove, reset } = useEvidenceUploads();
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  function submit() {
-    if (!body.trim() && !code?.trim() && attachments.length === 0) return;
-    addComment({
-      bugId: bug.id,
-      body: body.trim(),
-      code: code?.trim() ? code : null,
-      parentId: replyTo?.id ?? null,
-      attachments,
-    });
+  async function submit() {
+    if (!body.trim() && !code?.trim() && files.length === 0) return;
+    // Cleared up front so the composer feels immediate; the posted values are
+    // already captured in this closure.
+    const posted = { body: body.trim(), code, files, parentId: replyTo?.id ?? null };
     setBody("");
     setCode(null);
     reset([]);
     onCancelReply();
+
+    await addComment({
+      bugId: bug.id,
+      body: posted.body,
+      code: posted.code?.trim() ? posted.code : null,
+      parentId: posted.parentId,
+      files: posted.files,
+    });
     toast.success(replyTo ? "Reply posted" : "Comment added");
   }
 
@@ -282,7 +286,7 @@ function Composer({
       <div className="flex gap-2.5">
         <Avatar className="mt-0.5">
           <AvatarFallback>
-            {personOf(CURRENT_USER_ID)?.initials ?? "ME"}
+            {personOf(getCurrentUserId())?.initials ?? "ME"}
           </AvatarFallback>
         </Avatar>
         <div className="flex min-w-0 flex-1 flex-col gap-2">

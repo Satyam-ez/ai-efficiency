@@ -42,15 +42,14 @@ import {
 import {
   BROWSERS,
   COMPONENTS,
-  CURRENT_USER_ID,
   DEFAULT_ENVIRONMENT,
-  DEFAULT_PROJECT_ID,
   DEFAULT_PRIORITY,
   DEFAULT_SEVERITY,
   DEVELOPERS,
   DEVICES,
   LABELS,
   MODULES,
+  getCurrentUserId,
   OPERATING_SYSTEMS,
   PEOPLE,
   personName,
@@ -71,27 +70,36 @@ import {
 } from "@/lib/bug-board/types";
 import { cn } from "@/lib/utils";
 
-const EMPTY_DRAFT: Omit<BugDraft, "attachments"> = {
-  projectId: DEFAULT_PROJECT_ID,
-  title: "",
-  description: "",
-  module: MODULES[0],
-  component: COMPONENTS[0],
-  severity: DEFAULT_SEVERITY,
-  priority: DEFAULT_PRIORITY,
-  sprint: SPRINTS[0],
-  labels: [],
-  environment: DEFAULT_ENVIRONMENT,
-  browser: BROWSERS[0],
-  device: DEVICES[0],
-  os: OPERATING_SYSTEMS[0],
-  stepsToReproduce: "",
-  expectedResult: "",
-  actualResult: "",
-  reporterId: CURRENT_USER_ID,
-  assigneeId: null,
-  watcherIds: [],
-};
+/**
+ * A blank draft, built fresh each time the dialog opens.
+ *
+ * The dropdown option lists and the signed-in user are hydrated from the API at
+ * boot, so a module-level constant would freeze them while they are still
+ * empty — hence a function rather than a `const`.
+ */
+function emptyDraft(projectId: string): Omit<BugDraft, "attachments"> {
+  return {
+    projectId,
+    title: "",
+    description: "",
+    module: MODULES[0] ?? "",
+    component: COMPONENTS[0] ?? "",
+    severity: DEFAULT_SEVERITY,
+    priority: DEFAULT_PRIORITY,
+    sprint: SPRINTS[0] ?? "",
+    labels: [],
+    environment: DEFAULT_ENVIRONMENT,
+    browser: BROWSERS[0] ?? "",
+    device: DEVICES[0] ?? "",
+    os: OPERATING_SYSTEMS[0] ?? "",
+    stepsToReproduce: "",
+    expectedResult: "",
+    actualResult: "",
+    reporterId: getCurrentUserId() ?? "",
+    assigneeId: null,
+    watcherIds: [],
+  };
+}
 
 type FieldName =
   | "title"
@@ -223,12 +231,12 @@ function TokenSelect({
 
 export function BugFormDialog() {
   const {
-    activeProjectId,
     createOpen,
     closeCreate,
     editBugId,
     getBug,
     createBug,
+    defaultProjectId,
     projects,
     updateBugDetails,
     openDetail,
@@ -236,10 +244,12 @@ export function BugFormDialog() {
   } = useBugBoard();
 
   const editing = getBug(editBugId);
-  const [draft, setDraft] = useState<Omit<BugDraft, "attachments">>(EMPTY_DRAFT);
+  const [draft, setDraft] = useState<Omit<BugDraft, "attachments">>(() =>
+    emptyDraft("")
+  );
   const [errors, setErrors] = useState<Partial<Record<FieldName, string>>>({});
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const { attachments, addFiles, remove, reset } = useEvidenceUploads();
+  const { attachments, files, addFiles, remove, reset } = useEvidenceUploads();
   const titleRef = useRef<HTMLInputElement>(null);
 
   // Reloads the form whenever the dialog opens on a different target.
@@ -276,11 +286,7 @@ export function BugFormDialog() {
       reset(editing.attachments);
     } else {
       // A new bug lands in the project the tester is working in.
-      setDraft({
-        ...EMPTY_DRAFT,
-        projectId:
-          activeProjectId ?? projects[0]?.id ?? EMPTY_DRAFT.projectId,
-      });
+      setDraft(emptyDraft(defaultProjectId));
       reset([]);
     }
   }
@@ -317,7 +323,7 @@ export function BugFormDialog() {
     }
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     const nextErrors: Partial<Record<FieldName, string>> = {};
     if (!draft.title.trim()) nextErrors.title = "A bug needs a title.";
     if (!draft.description.trim()) {
@@ -340,21 +346,28 @@ export function BugFormDialog() {
     }
 
     const payload: BugDraft = { ...draft, attachments };
+    // Only files staged in this session are uploaded; anything already on the
+    // bug is left where it is.
+    const staged = files;
 
     if (editing) {
-      updateBugDetails(editing.id, payload);
-      toast.success(`${editing.id} updated`);
-    } else {
-      const bug = createBug(payload);
-      toast.success(`${bug.id} created`, {
-        description: `Filed in ${projectName(bug.projectId)}.`,
-        action: {
-          label: "View",
-          onClick: () => openDetail(bug.id),
-        },
-      });
+      const target = editing.id;
+      closeCreate();
+      await updateBugDetails(target, payload, staged);
+      toast.success(`${target} updated`);
+      return;
     }
+
     closeCreate();
+    const bug = await createBug(payload, staged);
+    if (!bug) return;
+    toast.success(`${bug.id} created`, {
+      description: `Filed in ${projectName(bug.projectId)}.`,
+      action: {
+        label: "View",
+        onClick: () => openDetail(bug.id),
+      },
+    });
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {

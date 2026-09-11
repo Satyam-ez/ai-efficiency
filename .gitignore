@@ -39,3 +39,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python / django backend
+__pycache__/
+*.py[cod]
+.venv/
+backend/media/
+backend/staticfiles/
+*.sqlite3
+
+# the env template is a placeholder-only file and is meant to be committed,
+# so it has to be pulled back out of the `.env*` rule above
+!backend/.env.example

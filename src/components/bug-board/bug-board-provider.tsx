@@ -4,19 +4,16 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
+import { toast } from "sonner";
 
-import {
-  CURRENT_USER_ID,
-  nextBugId,
-  personName,
-  SEED_BUGS,
-  SEED_PROJECTS,
-} from "@/lib/bug-board/data";
-import { createId, nowStamp } from "@/lib/bug-board/format";
+import { api, ApiError } from "@/lib/bug-board/api";
+import { hydrateRegistry } from "@/lib/bug-board/data";
+import { attachmentKindOf } from "@/lib/bug-board/format";
 import {
   activeFilterCount,
   DEFAULT_SORT,
@@ -31,21 +28,14 @@ import {
   type SortKey,
   type SummaryCard,
 } from "@/lib/bug-board/filters";
-import {
-  DEVELOPER_STATUS_LABELS,
-  SEVERITY_LABELS,
-  TESTER_STATUS_LABELS,
-  type ActivityEntry,
-  type ActivityKind,
-  type Attachment,
-  type Bug,
-  type BugDraft,
-  type Comment,
-  type DeveloperStatus,
-  type Priority,
-  type Project,
-  type Severity,
-  type TesterStatus,
+import type {
+  Bug,
+  BugDraft,
+  DeveloperStatus,
+  Priority,
+  Project,
+  Severity,
+  TesterStatus,
 } from "@/lib/bug-board/types";
 
 export const PAGE_SIZES = [10, 25, 50] as const;
@@ -78,7 +68,8 @@ export interface NewComment {
   body: string;
   code: string | null;
   parentId: string | null;
-  attachments: Attachment[];
+  /** Files staged in the composer; uploaded before the comment is posted. */
+  files: File[];
 }
 
 interface BugBoardValue {
@@ -93,6 +84,14 @@ interface BugBoardValue {
   summary: SummaryCard[];
   getBug: (id: string | null | undefined) => Bug | undefined;
 
+  /** True while the first load is in flight. */
+  loading: boolean;
+  /** Set when the board could not be loaded at all. */
+  loadError: string | null;
+  refresh: () => Promise<void>;
+  /** True while a write is in flight, for disabling destructive controls. */
+  saving: boolean;
+
   projects: Project[];
   /** `null` while the board shows every project at once. */
   activeProjectId: string | null;
@@ -100,16 +99,18 @@ interface BugBoardValue {
   setActiveProject: (projectId: string | null) => void;
   getProject: (id: string | null | undefined) => Project | undefined;
   projectName: (id: string | null | undefined) => string;
+  /** The project a new bug is filed into unless the user picks another. */
+  defaultProjectId: string;
   /** Per-project counts, in board order, for the switcher. */
   projectStats: ProjectStats[];
-  createProject: (draft: ProjectDraft) => Project;
-  updateProject: (id: string, draft: ProjectDraft) => void;
+  createProject: (draft: ProjectDraft) => Promise<Project | undefined>;
+  updateProject: (id: string, draft: ProjectDraft) => Promise<void>;
   /**
    * Removes a project. Its bugs move to `moveToId`; passing `null` is only
    * honoured when the project is already empty.
    */
-  deleteProject: (id: string, moveToId: string | null) => void;
-  moveBugsToProject: (ids: string[], projectId: string) => void;
+  deleteProject: (id: string, moveToId: string | null) => Promise<void>;
+  moveBugsToProject: (ids: string[], projectId: string) => Promise<void>;
 
   filters: BugFilters;
   filterCount: number;
@@ -134,19 +135,27 @@ interface BugBoardValue {
   /** Replaces the selection with the given ids, or clears it. */
   setSelection: (ids: string[]) => void;
 
-  createBug: (draft: BugDraft) => Bug;
-  updateBugDetails: (id: string, draft: BugDraft) => void;
-  duplicateBug: (id: string) => Bug | undefined;
-  deleteBugs: (ids: string[]) => void;
-  setTesterStatus: (ids: string[], status: TesterStatus) => void;
-  setDeveloperStatus: (ids: string[], status: DeveloperStatus) => void;
-  setSeverity: (ids: string[], severity: Severity) => void;
-  setPriority: (ids: string[], priority: Priority) => void;
-  assignBugs: (ids: string[], assigneeId: string | null) => void;
-  addAttachments: (bugId: string, attachments: Attachment[]) => void;
-  removeAttachment: (bugId: string, attachmentId: string) => void;
-  addComment: (comment: NewComment) => void;
-  toggleReaction: (bugId: string, commentId: string, emoji: string) => void;
+  createBug: (draft: BugDraft, files: File[]) => Promise<Bug | undefined>;
+  updateBugDetails: (
+    id: string,
+    draft: BugDraft,
+    files: File[]
+  ) => Promise<void>;
+  duplicateBug: (id: string) => Promise<Bug | undefined>;
+  deleteBugs: (ids: string[]) => Promise<void>;
+  setTesterStatus: (ids: string[], status: TesterStatus) => Promise<void>;
+  setDeveloperStatus: (ids: string[], status: DeveloperStatus) => Promise<void>;
+  setSeverity: (ids: string[], severity: Severity) => Promise<void>;
+  setPriority: (ids: string[], priority: Priority) => Promise<void>;
+  assignBugs: (ids: string[], assigneeId: string | null) => Promise<void>;
+  addAttachments: (bugId: string, files: File[]) => Promise<void>;
+  removeAttachment: (bugId: string, attachmentId: string) => Promise<void>;
+  addComment: (comment: NewComment) => Promise<void>;
+  toggleReaction: (
+    bugId: string,
+    commentId: string,
+    emoji: string
+  ) => Promise<void>;
 
   createOpen: boolean;
   openCreate: () => void;
@@ -177,34 +186,40 @@ interface BugBoardValue {
 
 const BugBoardContext = createContext<BugBoardValue | null>(null);
 
-function entry(
-  kind: ActivityKind,
-  summary: string,
-  from?: string,
-  to?: string
-): ActivityEntry {
+/** The payload shape the create/update endpoints take. */
+function toPayload(draft: BugDraft): Record<string, unknown> {
   return {
-    id: createId("act"),
-    kind,
-    actorId: CURRENT_USER_ID,
-    at: nowStamp(),
-    summary,
-    from,
-    to,
+    projectId: draft.projectId,
+    title: draft.title.trim(),
+    description: draft.description.trim(),
+    module: draft.module,
+    component: draft.component,
+    severity: draft.severity,
+    priority: draft.priority,
+    reporterId: draft.reporterId,
+    assigneeId: draft.assigneeId,
+    watcherIds: draft.watcherIds,
+    environment: draft.environment,
+    browser: draft.browser,
+    device: draft.device,
+    os: draft.os,
+    sprint: draft.sprint,
+    labels: draft.labels,
+    // Sent as the raw textarea string; the server strips any numbering the user
+    // typed and splits it into steps, so both ends agree on one rule.
+    stepsToReproduce: draft.stepsToReproduce,
+    expectedResult: draft.expectedResult.trim(),
+    actualResult: draft.actualResult.trim(),
   };
 }
 
-/** The steps textarea is free text; numbering the user typed is stripped. */
-function splitSteps(value: string): string[] {
-  return value
-    .split("\n")
-    .map((step) => step.replace(/^\s*\d+[.)]\s*/, "").trim())
-    .filter(Boolean);
-}
-
 export function BugBoardProvider({ children }: { children: ReactNode }) {
-  const [bugs, setBugs] = useState<Bug[]>(SEED_BUGS);
-  const [projects, setProjects] = useState<Project[]>(SEED_PROJECTS);
+  const [bugs, setBugs] = useState<Bug[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [filters, setFilters] = useState<BugFilters>(EMPTY_FILTERS);
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
@@ -223,6 +238,81 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
   const [shareTarget, setShareTarget] = useState<ShareTarget | undefined>(
     undefined
   );
+
+  const refresh = useCallback(async () => {
+    const [meta, nextProjects, nextBugs] = await Promise.all([
+      api.meta(),
+      api.projects(),
+      api.bugs(),
+    ]);
+    // People and the dropdown option lists are read synchronously all over the
+    // component tree, so they are filled in before the bugs land.
+    hydrateRegistry(meta);
+    setProjects(nextProjects);
+    setBugs(nextBugs);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Everything that touches state does so after the await, so the effect body
+    // itself stays free of synchronous renders.
+    async function load() {
+      try {
+        await refresh();
+      } catch (error: unknown) {
+        if (cancelled) return;
+        setLoadError(
+          error instanceof Error ? error.message : "The board failed to load."
+        );
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh]);
+
+  /**
+   * Runs a write, then reports failure where the user can see it.
+   *
+   * Returning `undefined` on failure is what lets call sites skip their success
+   * toast without every one of them growing a try/catch.
+   */
+  const run = useCallback(
+    async <T,>(work: () => Promise<T>): Promise<T | undefined> => {
+      setSaving(true);
+      try {
+        return await work();
+      } catch (error) {
+        toast.error(
+          error instanceof ApiError
+            ? error.message
+            : "That change could not be saved."
+        );
+        return undefined;
+      } finally {
+        setSaving(false);
+      }
+    },
+    []
+  );
+
+  /** Replaces one bug with the server's copy, activity and comments included. */
+  const syncBug = useCallback(async (key: string) => {
+    const fresh = await api.bug(key);
+    setBugs((previous) =>
+      previous.map((bug) => (bug.id === key ? fresh : bug))
+    );
+    return fresh;
+  }, []);
+
+  const syncBugs = useCallback(async (keys: string[]) => {
+    const fresh = await Promise.all(keys.map((key) => api.bug(key)));
+    const byId = new Map(fresh.map((bug) => [bug.id, bug]));
+    setBugs((previous) => previous.map((bug) => byId.get(bug.id) ?? bug));
+  }, []);
 
   // The project scope sits above the filters: everything below this line, the
   // summary cards included, only ever sees the active project's bugs.
@@ -283,30 +373,6 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
     [bugs, projects]
   );
 
-  /** Applies a patch plus its activity entries to a set of bugs. */
-  const patchBugs = useCallback(
-    (
-      ids: string[],
-      build: (bug: Bug) => { patch: Partial<Bug>; activity?: ActivityEntry[] } | null
-    ) => {
-      const targets = new Set(ids);
-      setBugs((previous) =>
-        previous.map((bug) => {
-          if (!targets.has(bug.id)) return bug;
-          const change = build(bug);
-          if (!change) return bug;
-          return {
-            ...bug,
-            ...change.patch,
-            activity: [...bug.activity, ...(change.activity ?? [])],
-            updatedAt: nowStamp(),
-          };
-        })
-      );
-    },
-    []
-  );
-
   /**
    * Switching project starts a clean view: no stale selection, page one. An id
    * this board does not know, such as a link to a project made elsewhere, falls
@@ -326,68 +392,67 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
     [projects]
   );
 
-  const createProject = useCallback((draft: ProjectDraft) => {
-    const project: Project = {
-      id: createId("proj"),
-      name: draft.name.trim(),
-      description: draft.description.trim(),
-      createdAt: nowStamp(),
-    };
-    setProjects((previous) => [...previous, project]);
-    setActiveProjectId(project.id);
-    setSelectedIds([]);
-    setPageState(1);
-    return project;
-  }, []);
+  const createProject = useCallback(
+    async (draft: ProjectDraft) => {
+      const project = await run(() =>
+        api.createProject({
+          name: draft.name.trim(),
+          description: draft.description.trim(),
+        })
+      );
+      if (!project) return undefined;
+      setProjects((previous) => [...previous, project]);
+      setActiveProjectId(project.id);
+      setSelectedIds([]);
+      setPageState(1);
+      return project;
+    },
+    [run]
+  );
 
-  const updateProject = useCallback((id: string, draft: ProjectDraft) => {
-    setProjects((previous) =>
-      previous.map((project) =>
-        project.id === id
-          ? {
-              ...project,
-              name: draft.name.trim(),
-              description: draft.description.trim(),
-            }
-          : project
-      )
-    );
-  }, []);
+  const updateProject = useCallback(
+    async (id: string, draft: ProjectDraft) => {
+      const project = await run(() =>
+        api.updateProject(id, {
+          name: draft.name.trim(),
+          description: draft.description.trim(),
+        })
+      );
+      if (!project) return;
+      setProjects((previous) =>
+        previous.map((item) => (item.id === id ? project : item))
+      );
+    },
+    [run]
+  );
 
   const moveBugsToProject = useCallback(
-    (ids: string[], projectId: string) =>
-      patchBugs(ids, (bug) =>
-        bug.projectId === projectId
-          ? null
-          : {
-              patch: { projectId },
-              activity: [
-                entry(
-                  "moved",
-                  "moved this to another project",
-                  projectName(bug.projectId),
-                  projectName(projectId)
-                ),
-              ],
-            }
-      ),
-    [patchBugs, projectName]
+    async (ids: string[], projectId: string) => {
+      const result = await run(() => api.bulk(ids, "move", projectId));
+      if (!result) return;
+      await syncBugs(ids);
+    },
+    [run, syncBugs]
   );
 
   const deleteProject = useCallback(
-    (id: string, moveToId: string | null) => {
+    async (id: string, moveToId: string | null) => {
       const owned = bugs.filter((bug) => bug.projectId === id);
-      if (owned.length > 0) {
-        if (!moveToId || moveToId === id) return;
-        moveBugsToProject(
-          owned.map((bug) => bug.id),
-          moveToId
-        );
-      }
+      // The server refuses to orphan bugs, so a destination is required
+      // whenever the project still holds any.
+      if (owned.length > 0 && (!moveToId || moveToId === id)) return;
+      const done = await run(async () => {
+        await api.deleteProject(id, owned.length > 0 ? moveToId : null);
+        return true;
+      });
+      if (!done) return;
       setProjects((previous) => previous.filter((project) => project.id !== id));
       setActiveProjectId((previous) => (previous === id ? moveToId : previous));
+      if (owned.length > 0) {
+        await syncBugs(owned.map((bug) => bug.id));
+      }
     },
-    [bugs, moveBugsToProject]
+    [bugs, run, syncBugs]
   );
 
   const setQuery = useCallback((query: string) => {
@@ -428,7 +493,11 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
     setSort((previous) =>
       previous.key === key
         ? { key, direction: previous.direction === "asc" ? "desc" : "asc" }
-        : { key, direction: key === "createdAt" || key === "updatedAt" ? "desc" : "asc" }
+        : {
+            key,
+            direction:
+              key === "createdAt" || key === "updatedAt" ? "desc" : "asc",
+          }
     );
   }, []);
 
@@ -450,397 +519,176 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  const createBug = useCallback((draft: BugDraft) => {
-    const at = nowStamp();
-    const steps = splitSteps(draft.stepsToReproduce);
-
-    let created: Bug | undefined;
-    setBugs((previous) => {
-      const bug: Bug = {
-        id: nextBugId(previous),
-        projectId: draft.projectId,
-        title: draft.title.trim(),
-        description: draft.description.trim(),
-        module: draft.module,
-        component: draft.component,
-        severity: draft.severity,
-        priority: draft.priority,
-        testerStatus: "open",
-        developerStatus: draft.assigneeId ? "assigned" : "backlog",
-        reporterId: draft.reporterId,
-        assigneeId: draft.assigneeId,
-        watcherIds: draft.watcherIds,
-        environment: draft.environment,
-        browser: draft.browser,
-        device: draft.device,
-        os: draft.os,
-        sprint: draft.sprint,
-        labels: draft.labels,
-        stepsToReproduce: steps,
-        expectedResult: draft.expectedResult.trim(),
-        actualResult: draft.actualResult.trim(),
-        attachments: draft.attachments,
-        activity: [
-          {
-            id: createId("act"),
-            kind: "created",
-            actorId: draft.reporterId,
-            at,
-            summary: "reported this bug",
-          },
-          ...(draft.attachments.length > 0
-            ? [
-                {
-                  id: createId("act"),
-                  kind: "attachment" as const,
-                  actorId: draft.reporterId,
-                  at,
-                  summary: `attached ${draft.attachments.length} file${
-                    draft.attachments.length === 1 ? "" : "s"
-                  }`,
-                },
-              ]
-            : []),
-          ...(draft.assigneeId
-            ? [
-                {
-                  id: createId("act"),
-                  kind: "assigned" as const,
-                  actorId: draft.reporterId,
-                  at,
-                  summary: `assigned this to ${personName(draft.assigneeId)}`,
-                },
-              ]
-            : []),
-        ],
-        comments: [],
-        createdAt: at,
-        updatedAt: at,
-      };
-      created = bug;
-      return [bug, ...previous];
-    });
-    setPageState(1);
-    return created as Bug;
+  /** Uploads staged evidence onto a bug that now exists. */
+  const uploadFiles = useCallback(async (key: string, files: File[]) => {
+    for (const file of files) {
+      await api.uploadAttachment(key, file, attachmentKindOf(file));
+    }
   }, []);
 
-  const updateBugDetails = useCallback(
-    (id: string, draft: BugDraft) =>
-      patchBugs([id], (bug) => {
-        const activity: ActivityEntry[] = [entry("edited", "edited the details")];
-        if (bug.severity !== draft.severity) {
-          activity.push(
-            entry(
-              "severity",
-              "changed severity",
-              SEVERITY_LABELS[bug.severity],
-              SEVERITY_LABELS[draft.severity]
-            )
-          );
+  const createBug = useCallback(
+    async (draft: BugDraft, files: File[]) => {
+      const created = await run(async () => {
+        const bug = await api.createBug(toPayload(draft));
+        // The bug has to exist before its evidence can hang off it, so the
+        // files follow the create rather than riding along with it.
+        if (files.length > 0) {
+          await uploadFiles(bug.id, files);
+          return api.bug(bug.id);
         }
-        if (bug.priority !== draft.priority) {
-          activity.push(
-            entry("priority", "changed priority", bug.priority, draft.priority)
-          );
-        }
-        if (bug.projectId !== draft.projectId) {
-          activity.push(
-            entry(
-              "moved",
-              "moved this to another project",
-              projectName(bug.projectId),
-              projectName(draft.projectId)
-            )
-          );
-        }
-        if (bug.assigneeId !== draft.assigneeId) {
-          activity.push(
-            entry(
-              "assigned",
-              draft.assigneeId
-                ? `assigned this to ${personName(draft.assigneeId)}`
-                : "removed the assignee",
-              bug.assigneeId ? personName(bug.assigneeId) : "Unassigned",
-              draft.assigneeId ? personName(draft.assigneeId) : "Unassigned"
-            )
-          );
-        }
+        return bug;
+      });
+      if (!created) return undefined;
+      setBugs((previous) => [created, ...previous]);
+      setPageState(1);
+      return created;
+    },
+    [run, uploadFiles]
+  );
 
-        return {
-          patch: {
-            projectId: draft.projectId,
-            title: draft.title.trim(),
-            description: draft.description.trim(),
-            module: draft.module,
-            component: draft.component,
-            severity: draft.severity,
-            priority: draft.priority,
-            reporterId: draft.reporterId,
-            assigneeId: draft.assigneeId,
-            watcherIds: draft.watcherIds,
-            environment: draft.environment,
-            browser: draft.browser,
-            device: draft.device,
-            os: draft.os,
-            sprint: draft.sprint,
-            labels: draft.labels,
-            stepsToReproduce: splitSteps(draft.stepsToReproduce),
-            expectedResult: draft.expectedResult.trim(),
-            actualResult: draft.actualResult.trim(),
-            attachments: draft.attachments,
-            developerStatus:
-              draft.assigneeId && bug.developerStatus === "backlog"
-                ? "assigned"
-                : bug.developerStatus,
-          },
-          activity,
-        };
-      }),
-    [patchBugs, projectName]
+  const updateBugDetails = useCallback(
+    async (id: string, draft: BugDraft, files: File[]) => {
+      const done = await run(async () => {
+        await api.updateBug(id, toPayload(draft));
+        if (files.length > 0) await uploadFiles(id, files);
+        return true;
+      });
+      if (!done) return;
+      await syncBug(id);
+    },
+    [run, syncBug, uploadFiles]
   );
 
   const duplicateBug = useCallback(
-    (id: string) => {
-      const source = bugs.find((bug) => bug.id === id);
-      if (!source) return undefined;
-      const at = nowStamp();
-      let copy: Bug | undefined;
-      setBugs((previous) => {
-        const bug: Bug = {
-          ...source,
-          id: nextBugId(previous),
-          title: `${source.title} (copy)`,
-          testerStatus: "open",
-          developerStatus: source.assigneeId ? "assigned" : "backlog",
-          comments: [],
-          activity: [
-            {
-              id: createId("act"),
-              kind: "created",
-              actorId: CURRENT_USER_ID,
-              at,
-              summary: `duplicated ${source.id}`,
-            },
-          ],
-          createdAt: at,
-          updatedAt: at,
-        };
-        copy = bug;
-        return [bug, ...previous];
-      });
+    async (id: string) => {
+      const copy = await run(() => api.duplicateBug(id));
+      if (!copy) return undefined;
+      setBugs((previous) => [copy, ...previous]);
       setPageState(1);
       return copy;
     },
-    [bugs]
+    [run]
   );
 
-  const deleteBugs = useCallback((ids: string[]) => {
-    const targets = new Set(ids);
-    setBugs((previous) => previous.filter((bug) => !targets.has(bug.id)));
-    setSelectedIds((previous) => previous.filter((id) => !targets.has(id)));
-    setDetailBugId((previous) => (previous && targets.has(previous) ? null : previous));
-  }, []);
+  const deleteBugs = useCallback(
+    async (ids: string[]) => {
+      const done = await run(() => api.bulk(ids, "delete"));
+      if (!done) return;
+      const targets = new Set(ids);
+      setBugs((previous) => previous.filter((bug) => !targets.has(bug.id)));
+      setSelectedIds((previous) => previous.filter((id) => !targets.has(id)));
+      setDetailBugId((previous) =>
+        previous && targets.has(previous) ? null : previous
+      );
+    },
+    [run]
+  );
+
+  /** Every status-style change is the same shape: one bulk call, then resync. */
+  const applyBulk = useCallback(
+    async (
+      ids: string[],
+      action: "testerStatus" | "developerStatus" | "severity" | "priority" | "assign",
+      value: string | null
+    ) => {
+      const result = await run(() => api.bulk(ids, action, value));
+      if (!result) return;
+      await syncBugs(ids);
+    },
+    [run, syncBugs]
+  );
 
   const setTesterStatus = useCallback(
     (ids: string[], status: TesterStatus) =>
-      patchBugs(ids, (bug) =>
-        bug.testerStatus === status
-          ? null
-          : {
-              patch: { testerStatus: status },
-              activity: [
-                entry(
-                  status === "verified"
-                    ? "verified"
-                    : status === "closed"
-                      ? "closed"
-                      : status === "reopened"
-                        ? "reopened"
-                        : "status",
-                  "changed tester status",
-                  TESTER_STATUS_LABELS[bug.testerStatus],
-                  TESTER_STATUS_LABELS[status]
-                ),
-              ],
-            }
-      ),
-    [patchBugs]
+      applyBulk(ids, "testerStatus", status),
+    [applyBulk]
   );
 
   const setDeveloperStatus = useCallback(
     (ids: string[], status: DeveloperStatus) =>
-      patchBugs(ids, (bug) =>
-        bug.developerStatus === status
-          ? null
-          : {
-              patch: { developerStatus: status },
-              activity: [
-                entry(
-                  status === "fixed" ? "fixed" : "status",
-                  "changed developer status",
-                  DEVELOPER_STATUS_LABELS[bug.developerStatus],
-                  DEVELOPER_STATUS_LABELS[status]
-                ),
-              ],
-            }
-      ),
-    [patchBugs]
+      applyBulk(ids, "developerStatus", status),
+    [applyBulk]
   );
 
   const setSeverity = useCallback(
-    (ids: string[], severity: Severity) =>
-      patchBugs(ids, (bug) =>
-        bug.severity === severity
-          ? null
-          : {
-              patch: { severity },
-              activity: [
-                entry(
-                  "severity",
-                  "changed severity",
-                  SEVERITY_LABELS[bug.severity],
-                  SEVERITY_LABELS[severity]
-                ),
-              ],
-            }
-      ),
-    [patchBugs]
+    (ids: string[], severity: Severity) => applyBulk(ids, "severity", severity),
+    [applyBulk]
   );
 
   const setPriority = useCallback(
-    (ids: string[], priority: Priority) =>
-      patchBugs(ids, (bug) =>
-        bug.priority === priority
-          ? null
-          : {
-              patch: { priority },
-              activity: [
-                entry("priority", "changed priority", bug.priority, priority),
-              ],
-            }
-      ),
-    [patchBugs]
+    (ids: string[], priority: Priority) => applyBulk(ids, "priority", priority),
+    [applyBulk]
   );
 
   const assignBugs = useCallback(
     (ids: string[], assigneeId: string | null) =>
-      patchBugs(ids, (bug) =>
-        bug.assigneeId === assigneeId
-          ? null
-          : {
-              patch: {
-                assigneeId,
-                developerStatus:
-                  assigneeId && bug.developerStatus === "backlog"
-                    ? "assigned"
-                    : bug.developerStatus,
-              },
-              activity: [
-                entry(
-                  "assigned",
-                  assigneeId
-                    ? `assigned this to ${personName(assigneeId)}`
-                    : "removed the assignee",
-                  bug.assigneeId ? personName(bug.assigneeId) : "Unassigned",
-                  assigneeId ? personName(assigneeId) : "Unassigned"
-                ),
-              ],
-            }
-      ),
-    [patchBugs]
+      applyBulk(ids, "assign", assigneeId),
+    [applyBulk]
   );
 
   const addAttachments = useCallback(
-    (bugId: string, attachments: Attachment[]) =>
-      patchBugs([bugId], (bug) => ({
-        patch: { attachments: [...bug.attachments, ...attachments] },
-        activity: attachments.map((attachment) =>
-          entry("attachment", `attached ${attachment.name}`)
-        ),
-      })),
-    [patchBugs]
+    async (bugId: string, files: File[]) => {
+      if (files.length === 0) return;
+      const done = await run(async () => {
+        await uploadFiles(bugId, files);
+        return true;
+      });
+      if (!done) return;
+      await syncBug(bugId);
+    },
+    [run, syncBug, uploadFiles]
   );
 
   const removeAttachment = useCallback(
-    (bugId: string, attachmentId: string) =>
-      patchBugs([bugId], (bug) => {
-        const removed = bug.attachments.find((item) => item.id === attachmentId);
-        if (!removed) return null;
-        return {
-          patch: {
-            attachments: bug.attachments.filter(
-              (item) => item.id !== attachmentId
-            ),
-          },
-          activity: [entry("attachment", `removed ${removed.name}`)],
-        };
-      }),
-    [patchBugs]
+    async (bugId: string, attachmentId: string) => {
+      const done = await run(async () => {
+        await api.deleteAttachment(attachmentId);
+        return true;
+      });
+      if (!done) return;
+      await syncBug(bugId);
+    },
+    [run, syncBug]
   );
 
   const addComment = useCallback(
-    ({ bugId, body, code, parentId, attachments }: NewComment) =>
-      patchBugs([bugId], (bug) => {
-        const comment: Comment = {
-          id: createId("cmt"),
-          authorId: CURRENT_USER_ID,
-          at: nowStamp(),
+    async ({ bugId, body, code, parentId, files }: NewComment) => {
+      const done = await run(async () => {
+        // Evidence is uploaded to the bug first, then claimed by the comment,
+        // which is what makes it show up in both places.
+        const uploaded = [];
+        for (const file of files) {
+          uploaded.push(
+            await api.uploadAttachment(bugId, file, attachmentKindOf(file))
+          );
+        }
+        await api.addComment(bugId, {
           body: body.trim(),
-          parentId,
           code,
-          attachments,
-          reactions: [],
-        };
-        return {
-          patch: {
-            comments: [...bug.comments, comment],
-            attachments:
-              attachments.length > 0
-                ? [...bug.attachments, ...attachments]
-                : bug.attachments,
-          },
-          activity: [
-            entry("comment", parentId ? "replied to a comment" : "added a comment"),
-          ],
-        };
-      }),
-    [patchBugs]
+          parentId,
+          attachmentIds: uploaded.map((attachment) => attachment.id),
+        });
+        return true;
+      });
+      if (!done) return;
+      await syncBug(bugId);
+    },
+    [run, syncBug]
   );
 
   const toggleReaction = useCallback(
-    (bugId: string, commentId: string, emoji: string) =>
-      patchBugs([bugId], (bug) => ({
-        patch: {
-          comments: bug.comments.map((comment) => {
-            if (comment.id !== commentId) return comment;
-            const existing = comment.reactions.find(
-              (reaction) => reaction.emoji === emoji
-            );
-            if (!existing) {
-              return {
-                ...comment,
-                reactions: [
-                  ...comment.reactions,
-                  { emoji, byIds: [CURRENT_USER_ID] },
-                ],
-              };
-            }
-            const byIds = existing.byIds.includes(CURRENT_USER_ID)
-              ? existing.byIds.filter((id) => id !== CURRENT_USER_ID)
-              : [...existing.byIds, CURRENT_USER_ID];
-            return {
-              ...comment,
-              reactions: comment.reactions
-                .map((reaction) =>
-                  reaction.emoji === emoji ? { ...reaction, byIds } : reaction
-                )
-                .filter((reaction) => reaction.byIds.length > 0),
-            };
-          }),
-        },
-      })),
-    [patchBugs]
+    async (bugId: string, commentId: string, emoji: string) => {
+      const done = await run(async () => {
+        await api.toggleReaction(commentId, emoji);
+        return true;
+      });
+      if (!done) return;
+      await syncBug(bugId);
+    },
+    [run, syncBug]
   );
+
+  const defaultProjectId = activeProjectId ?? projects[0]?.id ?? "";
 
   const value = useMemo<BugBoardValue>(
     () => ({
@@ -850,12 +698,17 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
       pageBugs,
       summary,
       getBug,
+      loading,
+      loadError,
+      refresh,
+      saving,
       projects,
       activeProjectId,
       activeProject,
       setActiveProject,
       getProject,
       projectName,
+      defaultProjectId,
       projectStats,
       createProject,
       updateProject,
@@ -935,6 +788,7 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
       createOpen,
       createProject,
       currentPage,
+      defaultProjectId,
       deleteBugs,
       deleteProject,
       detailBugId,
@@ -945,6 +799,8 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
       getBug,
       getProject,
       isSelected,
+      loadError,
+      loading,
       moveBugsToProject,
       pageBugs,
       pageCount,
@@ -955,8 +811,10 @@ export function BugBoardProvider({ children }: { children: ReactNode }) {
       projectName,
       projectStats,
       projects,
+      refresh,
       removeAttachment,
       resetFilters,
+      saving,
       scopedBugs,
       selectedIds,
       setActiveProject,

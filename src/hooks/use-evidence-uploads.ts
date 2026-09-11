@@ -2,128 +2,122 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { CURRENT_USER_ID } from "@/lib/bug-board/data";
-import {
-  attachmentKindOf,
-  createId,
-  nowStamp,
-} from "@/lib/bug-board/format";
+import { getCurrentUserId } from "@/lib/bug-board/data";
+import { attachmentKindOf, createId, nowStamp } from "@/lib/bug-board/format";
 import type { Attachment } from "@/lib/bug-board/types";
 
 /** Anything larger is rejected up front, with the file named in the message. */
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
-const TICK_MS = 140;
-
 export interface UploadResult {
+  /** Local previews, for rendering the queue straight away. */
   accepted: Attachment[];
+  /** The same files, to hand to the API. */
+  acceptedFiles: File[];
   rejected: File[];
 }
 
+interface Staged {
+  attachment: Attachment;
+  file: File;
+}
+
 /**
- * Local evidence queue with simulated upload progress. Files never leave the
- * browser: previews are object URLs, so nothing is sent anywhere.
+ * Staging queue for evidence the user has picked but not sent yet.
+ *
+ * It holds the real `File` objects alongside a local preview, because the
+ * upload itself belongs to the caller: the create form has no bug to attach to
+ * until the bug exists, while the details drawer and the comment box can upload
+ * immediately. Previews are object URLs and are revoked on removal.
  */
 export function useEvidenceUploads(initial: Attachment[] = []) {
-  const [attachments, setAttachments] = useState<Attachment[]>(initial);
-  const timers = useRef(new Map<string, ReturnType<typeof setInterval>>());
-
-  const stopTimer = useCallback((id: string) => {
-    const timer = timers.current.get(id);
-    if (timer) {
-      clearInterval(timer);
-      timers.current.delete(id);
-    }
-  }, []);
+  const [staged, setStaged] = useState<Staged[]>([]);
+  // Attachments the bug already has, shown in the queue when editing.
+  const [seeded, setSeeded] = useState<Attachment[]>(initial);
+  const objectUrls = useRef(new Set<string>());
 
   useEffect(() => {
-    const running = timers.current;
+    const urls = objectUrls.current;
     return () => {
-      for (const timer of running.values()) clearInterval(timer);
-      running.clear();
+      for (const url of urls) URL.revokeObjectURL(url);
+      urls.clear();
     };
   }, []);
 
-  const track = useCallback(
-    (id: string) => {
-      const timer = setInterval(() => {
-        setAttachments((previous) =>
-          previous.map((attachment) => {
-            if (attachment.id !== id) return attachment;
-            const progress = Math.min(100, attachment.progress + 18);
-            if (progress >= 100) {
-              stopTimer(id);
-              return { ...attachment, progress: 100, status: "ready" };
-            }
-            return { ...attachment, progress };
-          })
-        );
-      }, TICK_MS);
-      timers.current.set(id, timer);
-    },
-    [stopTimer]
-  );
+  const addFiles = useCallback((files: File[]): UploadResult => {
+    const accepted: Attachment[] = [];
+    const acceptedFiles: File[] = [];
+    const rejected: File[] = [];
 
-  const addFiles = useCallback(
-    (files: File[]): UploadResult => {
-      const accepted: Attachment[] = [];
-      const rejected: File[] = [];
-
-      for (const file of files) {
-        if (file.size > MAX_UPLOAD_BYTES) {
-          rejected.push(file);
-          continue;
-        }
-        const kind = attachmentKindOf(file);
-        const url = URL.createObjectURL(file);
-        accepted.push({
-          id: createId("att"),
-          name: file.name,
-          kind,
-          size: file.size,
-          url,
-          thumbnail: kind === "image" ? url : null,
-          uploadedAt: nowStamp(),
-          uploadedById: CURRENT_USER_ID,
-          progress: 0,
-          status: "uploading",
-        });
+    for (const file of files) {
+      if (file.size > MAX_UPLOAD_BYTES) {
+        rejected.push(file);
+        continue;
       }
-
-      if (accepted.length > 0) {
-        setAttachments((previous) => [...previous, ...accepted]);
-        for (const attachment of accepted) track(attachment.id);
-      }
-
-      return { accepted, rejected };
-    },
-    [track]
-  );
-
-  const remove = useCallback(
-    (id: string) => {
-      stopTimer(id);
-      setAttachments((previous) => {
-        const target = previous.find((attachment) => attachment.id === id);
-        // Only object URLs created here are revoked; seeded data URIs are shared.
-        if (target?.url?.startsWith("blob:")) URL.revokeObjectURL(target.url);
-        return previous.filter((attachment) => attachment.id !== id);
+      const kind = attachmentKindOf(file);
+      const url = URL.createObjectURL(file);
+      objectUrls.current.add(url);
+      accepted.push({
+        id: createId("staged"),
+        name: file.name,
+        kind,
+        size: file.size,
+        url,
+        thumbnail: kind === "image" ? url : null,
+        uploadedAt: nowStamp(),
+        uploadedById: getCurrentUserId() ?? "",
+        progress: 100,
+        status: "ready",
       });
-    },
-    [stopTimer]
-  );
+      acceptedFiles.push(file);
+    }
+
+    if (accepted.length > 0) {
+      setStaged((previous) => [
+        ...previous,
+        ...accepted.map((attachment, index) => ({
+          attachment,
+          file: acceptedFiles[index],
+        })),
+      ]);
+    }
+
+    return { accepted, acceptedFiles, rejected };
+  }, []);
+
+  const remove = useCallback((id: string) => {
+    setSeeded((previous) => previous.filter((item) => item.id !== id));
+    setStaged((previous) => {
+      const target = previous.find((entry) => entry.attachment.id === id);
+      const url = target?.attachment.url;
+      if (url?.startsWith("blob:")) {
+        URL.revokeObjectURL(url);
+        objectUrls.current.delete(url);
+      }
+      return previous.filter((entry) => entry.attachment.id !== id);
+    });
+  }, []);
 
   const reset = useCallback((next: Attachment[] = []) => {
-    for (const timer of timers.current.values()) clearInterval(timer);
-    timers.current.clear();
-    setAttachments(next);
+    setSeeded(next);
+    setStaged((previous) => {
+      for (const entry of previous) {
+        const url = entry.attachment.url;
+        if (url?.startsWith("blob:")) {
+          URL.revokeObjectURL(url);
+          objectUrls.current.delete(url);
+        }
+      }
+      return [];
+    });
   }, []);
 
   return {
-    attachments,
+    /** Seeded attachments first, then anything staged in this session. */
+    attachments: [...seeded, ...staged.map((entry) => entry.attachment)],
+    files: staged.map((entry) => entry.file),
     addFiles,
     remove,
     reset,
-    uploading: attachments.some((attachment) => attachment.status === "uploading"),
   };
 }
